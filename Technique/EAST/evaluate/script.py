@@ -1,6 +1,8 @@
 from collections import namedtuple
 import rrc_evaluation_funcs
 import importlib
+import numpy as np
+import shapely.geometry as plg
 
 def evaluation_imports():
     """

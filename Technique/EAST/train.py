@@ -9,6 +9,8 @@ import os
 import time
 import numpy as np
 
+imgpath = os.getcwd() + '/../'
+path = os.path.dirname(os.path.realpath(__file__))		
 
 def train(train_img_path, train_gt_path, pths_path, batch_size, lr, num_workers, epoch_iter, interval):
 	file_num = len(os.listdir(train_img_path))
@@ -55,9 +57,9 @@ def train(train_img_path, train_gt_path, pths_path, batch_size, lr, num_workers,
 
 
 if __name__ == '__main__':
-	train_img_path = os.path.abspath('D:/_data/personal_project/ICDAR_2015/train_img')
-	train_gt_path  = os.path.abspath('D:/_data/personal_project/ICDAR_2015/train_gt')
-	pths_path      = './pths/'
+	train_img_path = os.path.abspath(f'{imgpath}/ICDAR_2015/train_img')
+	train_gt_path  = os.path.abspath(f'{imgpath}/ICDAR_2015/train_gt')
+	pths_path      = '{path}/pths/'
 	batch_size     = 8
 	lr             = 1e-3
 	num_workers    = 8

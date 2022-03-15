@@ -3,7 +3,9 @@ import torch.nn as nn
 import torch.utils.model_zoo as model_zoo
 import torch.nn.functional as F
 import math
+import os
 
+path = os.path.dirname(os.path.realpath(__file__))		
 
 cfg = [64, 64, 'M', 128, 128, 'M', 256, 256, 256, 'M', 512, 512, 512, 'M', 512, 512, 512, 'M']
 
@@ -64,7 +66,7 @@ class extractor(nn.Module):
 		super(extractor, self).__init__()
 		vgg16_bn = VGG(make_layers(cfg, batch_norm=True))
 		if pretrained:
-			vgg16_bn.load_state_dict(torch.load('./pths/vgg16_bn-6c64b313.pth'))
+			vgg16_bn.load_state_dict(torch.load(f'{path}/pths/vgg16_bn-6c64b313.pth'))
 		self.features = vgg16_bn.features
 	
 	def forward(self, x):

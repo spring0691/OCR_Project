@@ -6,3 +6,5 @@
 
 4. model.py에 import os랑 path = os.path.dirname(os.path.realpath(__file__))와 
    69번째 줄 torch.load(f'{path}/pths/vgg16_bn-6c64b313.pth') 추가하여 수정했습니다. - 예람
+
+5. train.py 현재 없는데 업데이트 새로하고 5번 주석 지워주세요.

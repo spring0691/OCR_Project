@@ -2,11 +2,12 @@ import torch
 from torchvision import transforms
 from PIL import Image, ImageDraw
 from model import EAST
-import os
+import os, cv2
 from dataset import get_rotate_mat
 import numpy as np
 from lanms import merge_quadrangle_n9 as la_nms
 
+path = os.path.dirname(os.path.realpath(__file__))		
 
 def resize_img(img):
 	'''resize image to be divisible by 32
@@ -155,7 +156,8 @@ def plot_boxes(img, boxes):
 	
 	draw = ImageDraw.Draw(img)
 	for box in boxes:
-		draw.polygon([box[0], box[1], box[2], box[3], box[4], box[5], box[6], box[7]], outline=(0,255,0))
+		draw.polygon([box[0], box[1], box[2], box[3], box[4], box[5], box[6], box[7]], outline=(0,255,0),)
+		draw.line([box[0], box[1], box[2], box[3], box[4], box[5], box[6], box[7], box[0], box[1] ], fill='red', width=1)
 	return img
 
 
@@ -181,17 +183,52 @@ def detect_dataset(model, device, test_img_path, submit_path):
 
 
 if __name__ == '__main__':
-	img_path    = '../ICDAR_2015/test_img/img_2.jpg'
-	model_path  = './pths/east_vgg16.pth'
-	res_img     = './res.bmp'
-	device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-	model = EAST().to(device)
-	model.load_state_dict(torch.load(model_path))
-	model.eval()
-	img = Image.open(img_path)
-	
-	boxes = detect(img, model, device)
-	plot_img = plot_boxes(img, boxes)	
-	plot_img.save(res_img)
+		for i in range(14):
+			img_path    = f'D:\ICDAR_2015\english_receipt/{i+6}.jpg' 
+			model_path  = f'{path}/pths/model_epoch_600가중치.pth'
+			res_img     = f'./output/english_receipt{i+6}.bmp'
+			device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+			model = EAST().to(device)
+			model.load_state_dict(torch.load(model_path))
+			model.eval()
+			img = Image.open(img_path)
+			crop_img = cv2.imread(img_path)
+   
+			boxes = detect(img, model, device)
+
+			for j,crop in enumerate(boxes,start=1):
+				pts = np.array([ [crop[0],crop[1]], [crop[2],crop[3]], [crop[4],crop[5]], [crop[6],crop[7]] ])
+				
+				## (1) Crop the bounding rect
+				rect = cv2.boundingRect(pts)
+				x,y,w,h = rect
+				croped = crop_img[y:y+h, x:x+w].copy()
+
+				## (2) make mask
+				pts = pts - pts.min(axis=0)
+
+				mask = np.zeros(croped.shape[:2], np.uint8)
+    
+				ctr = np.array(pts).reshape((-1,1,2)).astype(np.int32)
+				# cv2.drawContours(mask, [ctr], 0, (0, 255, 0), -1)
+    
+				cv2.drawContours(mask, [ctr], -1, (255, 255, 255), -1, cv2.LINE_AA)
+
+				## (3) do bit-op
+				dst = cv2.bitwise_and(croped, croped, mask=mask)
+
+				## (4) add the white background
+				bg = np.ones_like(croped, np.uint8)*255
+				cv2.bitwise_not(bg,bg, mask=mask)
+				dst2 = bg+ dst
+
+				cv2.imwrite(f"./crop/croped{i+1}{j}.png", croped)
+				# cv2.imwrite(f"mask.png{j}.png", mask)
+				# cv2.imwrite(f"dst.png{j}.png", dst)
+				# cv2.imwrite(f"dst2.png{j}.png", dst2)
+
+			plot_img = plot_boxes(img, boxes)	
+			plot_img.save(res_img)
+			
 
 

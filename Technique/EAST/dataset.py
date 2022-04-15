@@ -10,20 +10,20 @@ from torch.utils import data
 
 
 def cal_distance(x1, y1, x2, y2):
-	'''calculate the Euclidean distance'''
-	return math.sqrt((x1 - x2)**2 + (y1 - y2)**2)
+	'''calculate the Euclidean distance'''								# 유클리디한 거리 계산해주는 함수
+	return math.sqrt((x1 - x2)**2 + (y1 - y2)**2)						# 제곱근을 반환.
 
 
-def move_points(vertices, index1, index2, r, coef):
-	'''move the two points to shrink edge
+def move_points(vertices, index1, index2, r, coef):						# 이동점
+	'''move the two points to shrink edge								두 점을 이동하여 가장자리 축소
 	Input:
-		vertices: vertices of text region <numpy.ndarray, (8,)>
-		index1  : offset of point1
+		vertices: vertices of text region <numpy.ndarray, (8,)>			text파일에서 받아온 8개의 좌표 정보. 근데 xy1세트 이므로 4개의 위치정보.
+		index1  : offset of point1										
 		index2  : offset of point2
 		r       : [r1, r2, r3, r4] in paper
-		coef    : shrink ratio in paper
+		coef    : shrink ratio in paper									종이의 수축률. 아마도 scale에 비례하여 얼마나 축소했는지?
 	Output:
-		vertices: vertices where one edge has been shinked
+		vertices: vertices where one edge has been shinked				한 모서리가 축소된 정점
 	'''
 	index1 = index1 % 4
 	index2 = index2 % 4

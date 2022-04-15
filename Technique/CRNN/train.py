@@ -1,114 +1,213 @@
-import os
-import glob
+from __future__ import print_function
+from __future__ import division
+
+import argparse
+import random
 import torch
+import torch.backends.cudnn as cudnn
+import torch.optim as optim
+import torch.utils.data
+from torch.autograd import Variable
 import numpy as np
-
-import albumentations
-from sklearn import preprocessing
-from sklearn import model_selection
-from sklearn import metrics
-
-import config
+from warpctc_pytorch import CTCLoss
+import os
+import utils
 import dataset
-import engine
-from model import CaptchaModel
 
-from torch import nn
+import models.crnn as crnn
 
+parser = argparse.ArgumentParser()
+parser.add_argument('--trainRoot', required=True, help='path to dataset')
+parser.add_argument('--valRoot', required=True, help='path to dataset')
+parser.add_argument('--workers', type=int, help='number of data loading workers', default=2)
+parser.add_argument('--batchSize', type=int, default=64, help='input batch size')
+parser.add_argument('--imgH', type=int, default=32, help='the height of the input image to network')
+parser.add_argument('--imgW', type=int, default=100, help='the width of the input image to network')
+parser.add_argument('--nh', type=int, default=256, help='size of the lstm hidden state')
+parser.add_argument('--nepoch', type=int, default=25, help='number of epochs to train for')
+# TODO(meijieru): epoch -> iter
+parser.add_argument('--cuda', action='store_true', help='enables cuda')
+parser.add_argument('--ngpu', type=int, default=1, help='number of GPUs to use')
+parser.add_argument('--pretrained', default='', help="path to pretrained model (to continue training)")
+parser.add_argument('--alphabet', type=str, default='0123456789abcdefghijklmnopqrstuvwxyz')
+parser.add_argument('--expr_dir', default='expr', help='Where to store samples and models')
+parser.add_argument('--displayInterval', type=int, default=500, help='Interval to be displayed')
+parser.add_argument('--n_test_disp', type=int, default=10, help='Number of samples to display when test')
+parser.add_argument('--valInterval', type=int, default=500, help='Interval to be displayed')
+parser.add_argument('--saveInterval', type=int, default=500, help='Interval to be displayed')
+parser.add_argument('--lr', type=float, default=0.01, help='learning rate for Critic, not used by adadealta')
+parser.add_argument('--beta1', type=float, default=0.5, help='beta1 for adam. default=0.5')
+parser.add_argument('--adam', action='store_true', help='Whether to use adam (default is rmsprop)')
+parser.add_argument('--adadelta', action='store_true', help='Whether to use adadelta (default is rmsprop)')
+parser.add_argument('--keep_ratio', action='store_true', help='whether to keep ratio for image resize')
+parser.add_argument('--manualSeed', type=int, default=1234, help='reproduce experiemnt')
+parser.add_argument('--random_sample', action='store_true', help='whether to sample the dataset with random sampler')
+opt = parser.parse_args()
+print(opt)
 
-def remove_duplicates(x):
-    if len(x) < 2:
-        return x
-    fin = ""
-    for j in x:
-        if fin == "":
-            fin = j
-        else:
-            if j == fin[-1]:
-                continue
-            else:
-                fin = fin + j
-    return fin
+if not os.path.exists(opt.expr_dir):
+    os.makedirs(opt.expr_dir)
 
+random.seed(opt.manualSeed)
+np.random.seed(opt.manualSeed)
+torch.manual_seed(opt.manualSeed)
 
-def decode_predictions(preds, encoder):
-    preds = preds.permute(1, 0, 2)
-    preds = torch.softmax(preds, 2)
-    preds = torch.argmax(preds, 2)
-    preds = preds.detach().cpu().numpy()
-    cap_preds = []
-    for j in range(preds.shape[0]):
-        temp = []
-        for k in preds[j, :]:
-            k = k - 1
-            if k == -1:
-                temp.append("§")
-            else:
-                p = encoder.inverse_transform([k])[0]
-                temp.append(p)
-        tp = "".join(temp).replace("§", "")
-        cap_preds.append(remove_duplicates(tp))
-    return cap_preds
+cudnn.benchmark = True
 
+if torch.cuda.is_available() and not opt.cuda:
+    print("WARNING: You have a CUDA device, so you should probably run with --cuda")
 
-def run_training():
-    image_files = glob.glob(os.path.join(config.DATA_DIR, "*.png"))
-    targets_orig = [x.split("/")[-1].split("\\")[-1][:-4] for x in image_files]
-    targets = [[c for c in x] for x in targets_orig]
-    targets_flat = [c for clist in targets for c in clist]
+train_dataset = dataset.lmdbDataset(root=opt.trainroot)
+assert train_dataset
+if not opt.random_sample:
+    sampler = dataset.randomSequentialSampler(train_dataset, opt.batchSize)
+else:
+    sampler = None
+train_loader = torch.utils.data.DataLoader(
+    train_dataset, batch_size=opt.batchSize,
+    shuffle=True, sampler=sampler,
+    num_workers=int(opt.workers),
+    collate_fn=dataset.alignCollate(imgH=opt.imgH, imgW=opt.imgW, keep_ratio=opt.keep_ratio))
+test_dataset = dataset.lmdbDataset(
+    root=opt.valroot, transform=dataset.resizeNormalize((100, 32)))
 
-    lbl_enc = preprocessing.LabelEncoder()
-    lbl_enc.fit(targets_flat)
-    targets_enc = [lbl_enc.transform(x) for x in targets]
-    targets_enc = np.array(targets_enc)
-    targets_enc = targets_enc + 1
+nclass = len(opt.alphabet) + 1
+nc = 1
 
-    (train_imgs,test_imgs,train_targets,test_targets,_,test_targets_orig) = model_selection.train_test_split(image_files, targets_enc, targets_orig, test_size=0.1, random_state=42)
-
-    train_dataset = dataset.ClassificationDataset(
-        image_paths=train_imgs,
-        targets=train_targets,
-        resize=(config.IMAGE_HEIGHT, config.IMAGE_WIDTH))
-    
-    train_loader = torch.utils.data.DataLoader(
-        train_dataset,
-        batch_size=config.BATCH_SIZE,
-        num_workers=config.NUM_WORKERS,
-        shuffle=True)
-    
-    test_dataset = dataset.ClassificationDataset(
-        image_paths=test_imgs,
-        targets=test_targets,
-        resize=(config.IMAGE_HEIGHT, config.IMAGE_WIDTH))
-    
-    test_loader = torch.utils.data.DataLoader(
-        test_dataset,
-        batch_size=config.BATCH_SIZE,
-        num_workers=config.NUM_WORKERS,
-        shuffle=False,)
-
-    model = CaptchaModel(num_chars=len(lbl_enc.classes_))
-    model.to(config.DEVICE)
-
-    optimizer = torch.optim.Adam(model.parameters(), lr=3e-4)
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, factor=0.8, patience=5, verbose=True)
-    
-    for epoch in range(config.EPOCHS):
-        train_loss = engine.train_fn(model, train_loader, optimizer)
-        valid_preds, test_loss = engine.eval_fn(model, test_loader)
-        valid_captcha_preds = []
-        for vp in valid_preds:
-            current_preds = decode_predictions(vp, lbl_enc)
-            valid_captcha_preds.extend(current_preds)
-        combined = list(zip(test_targets_orig, valid_captcha_preds))
-        print(combined[:10])
-        test_dup_rem = [remove_duplicates(c) for c in test_targets_orig]
-        accuracy = metrics.accuracy_score(test_dup_rem, valid_captcha_preds)
-        print(
-            f"Epoch={epoch}, Train Loss={train_loss}, Test Loss={test_loss} Accuracy={accuracy}"
-        )
-        scheduler.step(test_loss)
+converter = utils.strLabelConverter(opt.alphabet)
+criterion = CTCLoss()
 
 
-if __name__ == "__main__":
-    run_training()
+# custom weights initialization called on crnn
+def weights_init(m):
+    classname = m.__class__.__name__
+    if classname.find('Conv') != -1:
+        m.weight.data.normal_(0.0, 0.02)
+    elif classname.find('BatchNorm') != -1:
+        m.weight.data.normal_(1.0, 0.02)
+        m.bias.data.fill_(0)
+
+
+crnn = crnn.CRNN(opt.imgH, nc, nclass, opt.nh)
+crnn.apply(weights_init)
+if opt.pretrained != '':
+    print('loading pretrained model from %s' % opt.pretrained)
+    crnn.load_state_dict(torch.load(opt.pretrained))
+print(crnn)
+
+image = torch.FloatTensor(opt.batchSize, 3, opt.imgH, opt.imgH)
+text = torch.IntTensor(opt.batchSize * 5)
+length = torch.IntTensor(opt.batchSize)
+
+if opt.cuda:
+    crnn.cuda()
+    crnn = torch.nn.DataParallel(crnn, device_ids=range(opt.ngpu))
+    image = image.cuda()
+    criterion = criterion.cuda()
+
+image = Variable(image)
+text = Variable(text)
+length = Variable(length)
+
+# loss averager
+loss_avg = utils.averager()
+
+# setup optimizer
+if opt.adam:
+    optimizer = optim.Adam(crnn.parameters(), lr=opt.lr,
+                           betas=(opt.beta1, 0.999))
+elif opt.adadelta:
+    optimizer = optim.Adadelta(crnn.parameters())
+else:
+    optimizer = optim.RMSprop(crnn.parameters(), lr=opt.lr)
+
+
+def val(net, dataset, criterion, max_iter=100):
+    print('Start val')
+
+    for p in crnn.parameters():
+        p.requires_grad = False
+
+    net.eval()
+    data_loader = torch.utils.data.DataLoader(
+        dataset, shuffle=True, batch_size=opt.batchSize, num_workers=int(opt.workers))
+    val_iter = iter(data_loader)
+
+    i = 0
+    n_correct = 0
+    loss_avg = utils.averager()
+
+    max_iter = min(max_iter, len(data_loader))
+    for i in range(max_iter):
+        data = val_iter.next()
+        i += 1
+        cpu_images, cpu_texts = data
+        batch_size = cpu_images.size(0)
+        utils.loadData(image, cpu_images)
+        t, l = converter.encode(cpu_texts)
+        utils.loadData(text, t)
+        utils.loadData(length, l)
+
+        preds = crnn(image)
+        preds_size = Variable(torch.IntTensor([preds.size(0)] * batch_size))
+        cost = criterion(preds, text, preds_size, length) / batch_size
+        loss_avg.add(cost)
+
+        _, preds = preds.max(2)
+        preds = preds.squeeze(2)
+        preds = preds.transpose(1, 0).contiguous().view(-1)
+        sim_preds = converter.decode(preds.data, preds_size.data, raw=False)
+        for pred, target in zip(sim_preds, cpu_texts):
+            if pred == target.lower():
+                n_correct += 1
+
+    raw_preds = converter.decode(preds.data, preds_size.data, raw=True)[:opt.n_test_disp]
+    for raw_pred, pred, gt in zip(raw_preds, sim_preds, cpu_texts):
+        print('%-20s => %-20s, gt: %-20s' % (raw_pred, pred, gt))
+
+    accuracy = n_correct / float(max_iter * opt.batchSize)
+    print('Test loss: %f, accuray: %f' % (loss_avg.val(), accuracy))
+
+
+def trainBatch(net, criterion, optimizer):
+    data = train_iter.next()
+    cpu_images, cpu_texts = data
+    batch_size = cpu_images.size(0)
+    utils.loadData(image, cpu_images)
+    t, l = converter.encode(cpu_texts)
+    utils.loadData(text, t)
+    utils.loadData(length, l)
+
+    preds = crnn(image)
+    preds_size = Variable(torch.IntTensor([preds.size(0)] * batch_size))
+    cost = criterion(preds, text, preds_size, length) / batch_size
+    crnn.zero_grad()
+    cost.backward()
+    optimizer.step()
+    return cost
+
+
+for epoch in range(opt.nepoch):
+    train_iter = iter(train_loader)
+    i = 0
+    while i < len(train_loader):
+        for p in crnn.parameters():
+            p.requires_grad = True
+        crnn.train()
+
+        cost = trainBatch(crnn, criterion, optimizer)
+        loss_avg.add(cost)
+        i += 1
+
+        if i % opt.displayInterval == 0:
+            print('[%d/%d][%d/%d] Loss: %f' %
+                  (epoch, opt.nepoch, i, len(train_loader), loss_avg.val()))
+            loss_avg.reset()
+
+        if i % opt.valInterval == 0:
+            val(crnn, test_dataset, criterion)
+
+        # do checkpointing
+        if i % opt.saveInterval == 0:
+            torch.save(
+                crnn.state_dict(), '{0}/netCRNN_{1}_{2}.pth'.format(opt.expr_dir, epoch, i))

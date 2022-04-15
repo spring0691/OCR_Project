@@ -9,8 +9,6 @@ import os
 import time
 import numpy as np
 
-os.environ['KMP_DUPLICATE_LIB_OK']='True'
-
 imgpath = os.getcwd() + '/../'
 path = os.path.dirname(os.path.realpath(__file__))		
 

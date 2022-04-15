@@ -35,6 +35,6 @@ def eval_model(model_name, test_img_path, submit_path, save_flag=True):
 
 if __name__ == '__main__': 
 	model_name = './pths/east_vgg16.pth'
-	test_img_path = os.path.abspath('D:/_data/personal project/ICDAR_2015/test_img')
+	test_img_path = os.path.abspath('D:\ICDAR_2015\life_test')
 	submit_path = './submit'
 	eval_model(model_name, test_img_path, submit_path)
